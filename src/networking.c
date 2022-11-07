@@ -80,6 +80,10 @@ void get_signature(char* password, char* salt, hashdata_t* hash)
 {
     // Your code here. This function has been added as a guide, but feel free 
     // to add more, or work in other parts of the code
+
+    char to_hash[strlen(password) + strlen(salt)];
+    get_data_sha(strcpy(to_hash, strcat(password, salt)), &hash, sizeof(to_hash), SHA256_HASH_SIZE);
+
 }
 
 /*
