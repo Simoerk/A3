@@ -78,12 +78,12 @@ void get_file_sha(const char* sourcefile, hashdata_t hash, int size)
  */
 void get_signature(char* password, char* salt, hashdata_t* hash)
 {
-    // Your code here. This function has been added as a guide, but feel free 
-    // to add more, or work in other parts of the code
+    
+    char to_hash[PASSWORD_LEN + SALT_LEN];
 
-    char to_hash[strlen(password) + strlen(salt)];
-    get_data_sha(strcpy(to_hash, strcat(password, salt)), &hash, sizeof(to_hash), SHA256_HASH_SIZE);
-
+    memcpy(to_hash, password, PASSWORD_LEN);
+    memcpy(&to_hash[PASSWORD_LEN], salt, SALT_LEN);
+    get_data_sha(to_hash, *hash, PASSWORD_LEN + SALT_LEN, SHA256_HASH_SIZE);
 }
 
 /*
@@ -92,8 +92,29 @@ void get_signature(char* password, char* salt, hashdata_t* hash)
  */
 void register_user(char* username, char* password, char* salt)
 {
-    // Your code here. This function has been added as a guide, but feel free 
-    // to add more, or work in other parts of the code
+    rio_t rio;
+    hashdata_t hash;
+    get_signature(password, salt, &hash);
+    char to_send[REQUEST_HEADER_LEN];
+
+    memcpy(to_send, username, USERNAME_LEN);
+    memcpy(&to_send[USERNAME_LEN], &hash, SHA256_HASH_SIZE);
+    u_int32_t length = 0;
+    memcpy(&to_send[16+SHA256_HASH_SIZE], &length, 4);
+    
+    int server_socket = Open_clientfd(server_ip, server_port);
+
+    Rio_readinitb(&rio, server_socket);
+
+    Rio_writen(server_socket, to_send, REQUEST_HEADER_LEN);
+
+    char response[MAXLINE];
+    Rio_readnb(&rio, response, MAXLINE);
+    
+    printf("%s", &response[RESPONSE_HEADER_LEN]);
+    
+    printf("\n");
+    close(server_socket);
 }
 
 /*
@@ -103,8 +124,34 @@ void register_user(char* username, char* password, char* salt)
  */
 void get_file(char* username, char* password, char* salt, char* to_get)
 {
-    // Your code here. This function has been added as a guide, but feel free 
-    // to add more, or work in other parts of the code
+
+    rio_t rio;
+    hashdata_t hash;
+    u_int32_t length = strlen(to_get);
+
+    get_signature(password, salt, &hash);
+    char to_send[REQUEST_HEADER_LEN+length];
+
+    memcpy(to_send, username, USERNAME_LEN);
+    memcpy(&to_send[USERNAME_LEN], &hash, SHA256_HASH_SIZE);
+    memcpy(&to_send[USERNAME_LEN+SHA256_HASH_SIZE], &length, 4);
+    memcpy(&to_send[REQUEST_HEADER_LEN], to_get, length);
+    
+    int server_socket = Open_clientfd(server_ip, server_port);
+
+    Rio_readinitb(&rio, server_socket);
+
+
+    Rio_writen(server_socket, &to_send, REQUEST_HEADER_LEN + length);
+
+    char response[MAX_MSG_LEN];
+    Rio_readnb(&rio, response, MAX_MSG_LEN);
+    
+    printf("%s", &response[MAX_MSG_LEN]);
+    
+    printf("\n");
+
+    close(server_socket);
 }
 
 int main(int argc, char **argv)
