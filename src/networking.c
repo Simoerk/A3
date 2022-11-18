@@ -83,6 +83,7 @@ void get_signature(char* password, char* salt, hashdata_t* hash)
 
     memcpy(to_hash, password, PASSWORD_LEN);
     memcpy(&to_hash[PASSWORD_LEN], salt, SALT_LEN);
+    to_hash[strlen(password)+strlen(salt)] = '\0';
     get_data_sha(to_hash, *hash, PASSWORD_LEN + SALT_LEN, SHA256_HASH_SIZE);
 }
 
@@ -95,40 +96,40 @@ void register_user(char* username, char* password, char* salt)
     rio_t rio;
     hashdata_t hash;
     get_signature(password, salt, &hash);
-    char to_send[REQUEST_HEADER_LEN];
 
+    //Assemble request
+    char to_send[REQUEST_HEADER_LEN];
     memcpy(to_send, username, USERNAME_LEN);
     memcpy(&to_send[USERNAME_LEN], &hash, SHA256_HASH_SIZE);
     u_int32_t length = 0;
     memcpy(&to_send[16+SHA256_HASH_SIZE], &length, 4);
     
+    //Open socket, initialize and send request.
     int server_socket = Open_clientfd(server_ip, server_port);
-
     Rio_readinitb(&rio, server_socket);
-
     Rio_writen(server_socket, to_send, REQUEST_HEADER_LEN);
 
+    //Read response
     char response[MAX_MSG_LEN];
     Rio_readnb(&rio, response, MAX_MSG_LEN);
 
-    char response_header[RESPONSE_HEADER_LEN];
+    //Analyse response
+    char response_header[RESPONSE_HEADER_LEN+1];
     memcpy(response_header, response, RESPONSE_HEADER_LEN);
-
     uint32_t payload_length = ntohl(*(uint32_t*)&response_header);
     uint32_t status_code = ntohl(*(uint32_t*)&response_header[4]);
     uint32_t block_number = ntohl(*(uint32_t*)&response_header[8]);
     uint32_t block_count = ntohl(*(uint32_t*)&response_header[12]);
+    response_header[RESPONSE_HEADER_LEN] = '\0';
 
     hashdata_t block_hash;
     memcpy(block_hash, &response_header[16], SHA256_HASH_SIZE);
-
     hashdata_t total_hash;
     memcpy(total_hash, &response_header[16+SHA256_HASH_SIZE], SHA256_HASH_SIZE);
 
-
+     //Check hash
     hashdata_t hash_payload;
     get_data_sha(&response[RESPONSE_HEADER_LEN], &hash_payload, payload_length, SHA256_HASH_SIZE);
-
     for (int i = 0; i < SHA256_HASH_SIZE; i++)
     {
         if (hash_payload[i] != block_hash[i])
@@ -138,10 +139,16 @@ void register_user(char* username, char* password, char* salt)
         }
     }
 
+    //get paylaod.
+    char payload[payload_length];
+    memcpy(payload, &response[RESPONSE_HEADER_LEN], payload_length);
+    payload[payload_length] = '\0';
+
+    //chech status and print response
     if (status_code == 1){
-        printf("%s\n", &response[RESPONSE_HEADER_LEN]);
+        printf("Server repsonse: %s\n", payload);
     } else {
-        printf("Error: %s\n", &response[RESPONSE_HEADER_LEN]);
+        printf("Error: %s\n", payload);
     }
     
     printf("\n");
@@ -166,7 +173,7 @@ void get_file(char* username, char* password, char* salt, char* to_get)
     memcpy(&to_send[USERNAME_LEN+SHA256_HASH_SIZE], &length, 4);
     memcpy(&to_send[REQUEST_HEADER_LEN], to_get, strlen(to_get));
     
-    //Send message
+    //Send request
     int server_socket = Open_clientfd(server_ip, server_port);
     Rio_readinitb(&rio, server_socket);
     Rio_writen(server_socket, &to_send, REQUEST_HEADER_LEN + strlen(to_get));
@@ -184,7 +191,6 @@ void get_file(char* username, char* password, char* salt, char* to_get)
     uint32_t block_number = ntohl(*(uint32_t*)&response_header[8]);
     uint32_t block_count = ntohl(*(uint32_t*)&response_header[12]);
 
-
     //Get first block hash
     hashdata_t block_hash;
     memcpy(block_hash, &response_header[16], SHA256_HASH_SIZE);
@@ -192,11 +198,18 @@ void get_file(char* username, char* password, char* salt, char* to_get)
     hashdata_t total_hash;
     memcpy(total_hash, &response_header[16+SHA256_HASH_SIZE], SHA256_HASH_SIZE);
 
+    //save payload
+    char firstpayload[payload_length+1];
+    memcpy(firstpayload, &response[RESPONSE_HEADER_LEN], payload_length);
+    firstpayload[payload_length] = '\0';
+
+
     //Check status
     if (status_code == 1){
         printf("First Block Status OK\n");
     } else {
-        printf("Error: First block status not OK\n");
+        printf("Error: First block status not OK: %s\n", firstpayload);
+        close(server_socket);
         exit(1);
     }
 
@@ -214,11 +227,10 @@ void get_file(char* username, char* password, char* salt, char* to_get)
 
     //open file.
     FILE *fptr;
-    fptr = fopen("test/test6.txt","w");//Hardcode way of choosing destination.
+    fptr = fopen("test/test42.txt","w");//Hardcode way of choosing destination.
 
     //insert first block
-    fseek(fptr, block_number*MAX_PAYLOAD, SEEK_SET);
-    fprintf(fptr,"%s\n", &response[RESPONSE_HEADER_LEN]);
+    fprintf(fptr,"%s", firstpayload);
 
     //Check and process the rest of the blocks.
     for (uint32_t i = 1; i<block_count; i++)
@@ -226,10 +238,11 @@ void get_file(char* username, char* password, char* salt, char* to_get)
         Rio_readnb(&rio, response, MAX_MSG_LEN);
         memcpy(response_header, response, RESPONSE_HEADER_LEN);
 
-        uint32_t payload_length = ntohl(*(uint32_t*)&response_header);
-        uint32_t status_code = ntohl(*(uint32_t*)&response_header[4]);
-        uint32_t block_number = ntohl(*(uint32_t*)&response_header[8]);
-        uint32_t block_count = ntohl(*(uint32_t*)&response_header[12]);
+        payload_length = ntohl(*(uint32_t*)&response_header);
+        status_code = ntohl(*(uint32_t*)&response_header[4]);
+        block_number = ntohl(*(uint32_t*)&response_header[8]);
+        block_count = ntohl(*(uint32_t*)&response_header[12]);
+        printf("block count: %d\n", block_number);
 
         memcpy(block_hash, &response_header[16], SHA256_HASH_SIZE);
 
@@ -238,6 +251,8 @@ void get_file(char* username, char* password, char* salt, char* to_get)
             printf("Block nr:%d status OK\n", i);
         } else {
             printf("Error: Block %d status not OK\n", i);
+            close(server_socket);
+            fclose(fptr);
             exit(1);
         }
 
@@ -248,22 +263,30 @@ void get_file(char* username, char* password, char* salt, char* to_get)
             if (hashed_payload[j] != block_hash[j])
             {
                 printf("Block hash does not match payload hash for block %d\n", i);
+                close(server_socket);
+                fclose(fptr);
                 exit(1);
-            }
+            } //else {
+              //  printf("Block hash matches payload hash for block %d\n", j);
+           // }
         }
 
-        fseek(fptr, block_number*payload_length, SEEK_SET);
-        fprintf(fptr,"%s\n", &response[RESPONSE_HEADER_LEN]);
+        char payload[payload_length+1];
+        memcpy(payload, &response[RESPONSE_HEADER_LEN], payload_length);
+        payload[payload_length] = '\0';
+        fprintf(fptr,"%s", payload);
     }
 
-
+    //Check total hash
     hashdata_t client_total_hash;
-    get_file_sha("test/test6.txt", client_total_hash, SHA256_HASH_SIZE);
-    for (uint32_t i = 0; i < SHA256_HASH_SIZE; i++)
-    {
+    get_file_sha("test/test42.txt", client_total_hash, SHA256_HASH_SIZE);
+    for (int i = 0; i < SHA256_HASH_SIZE; i++)
+    {   
         if (client_total_hash[i] != total_hash[i])
         {
             printf("Total block hash does not match payload hash\n");
+            fclose(fptr);
+            close(server_socket);
             exit(1);
         } else {
             printf("Total block hash matches\n");
@@ -356,9 +379,9 @@ int main(int argc, char **argv)
         user_salt[i] = 'a' + (random() % 26);
     }
     user_salt[SALT_LEN] = '\0';
-    //strncpy(user_salt, 
-    //    "0123456789012345678901234567890123456789012345678901234567890123\0", 
-    //    SALT_LEN+1);
+    strncpy(user_salt, 
+        "0123456789012345678901234567890123456789012345678901234567890123\0", 
+        SALT_LEN+1);
 
     fprintf(stdout, "Using salt: %s\n", user_salt);
 
@@ -370,10 +393,10 @@ int main(int argc, char **argv)
     register_user(username, password, user_salt);
 
     // Retrieve the smaller file, that doesn't not require support for blocks
-    get_file(username, password, user_salt, "tiny.txt");
+    //get_file(username, password, user_salt, "tiny.txt");
 
     // Retrieve the larger file, that requires support for blocked messages
-    //get_file(username, password, user_salt, "hamlet.txt");//Breaker pipen?
+    get_file(username, password, user_salt, "hamlet.txt");//Breaker pipen?
 
     exit(EXIT_SUCCESS);
 }
